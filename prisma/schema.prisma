@@ -1,0 +1,292 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AssuranceMethod {
+  MILESTONE_INVOICE
+  EXTERNAL_ESCROW
+  CARD_HOLD
+}
+
+model User {
+  id                 String            @id @default(cuid())
+  handle             String            @unique
+  name               String
+  email              String            @unique
+  avatarUrl          String?
+  roleClient         Boolean           @default(true)
+  roleFreelancer     Boolean           @default(true)
+  bio                String?
+  skills             String[]          @default([])
+  languages          String[]          @default([])
+  location           String?
+  links              Json?
+  preferredAssurance AssuranceMethod   @default(MILESTONE_INVOICE)
+  alsoAccepts        AssuranceMethod[] @default([])
+  ratingCount        Int               @default(0)
+  ratingAverage      Float             @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  // Relations
+  jobs              Job[]        @relation("ClientJobs")
+  proposals         Proposal[]   @relation("FreelancerProposals")
+  reviewsGiven      Review[]     @relation("ReviewsGiven")
+  reviewsReceived   Review[]     @relation("ReviewsReceived")
+  sentMessages      Message[]    @relation("SentMessages")
+  reportsMade       Report[]     @relation("ReportsMade")
+  reportsReceived   Report[]     @relation("ReportsReceived")
+  auditLogs         AuditLog[]   @relation("AuditLogs")
+  rateLimits        RateLimit[]  @relation("UserRateLimits")
+  clientAgreements  Agreement[]  @relation("ClientAgreements")
+  freelancerAgreements Agreement[] @relation("FreelancerAgreements")
+  interests         Interest[]   @relation("FreelancerInterests")
+  dailyLimits       DailyInterestLimit[] @relation("UserDailyLimits")
+
+  @@map("users")
+}
+
+model Job {
+  id            String            @id @default(cuid())
+  clientId      String
+  title         String
+  description   String
+  skills        String[]          @default([])
+  budgetType    String            // "hourly" | "fixed"
+  budgetAmount  Int?
+  positionsTotal     Int              @default(1) // Total positions available
+  positionsFilled    Int              @default(0) // Positions filled
+  status        String            @default("open") // "open"|"in_progress"|"closed"|"completed"
+  attachments   Json?
+  assuranceHint AssuranceMethod?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  // Relations
+  client    User         @relation("ClientJobs", fields: [clientId], references: [id], onDelete: Cascade)
+  proposals Proposal[]
+  threads   Thread[]
+  interests Interest[]
+
+  @@map("jobs")
+}
+
+model Proposal {
+  id           String   @id @default(cuid())
+  jobId        String
+  freelancerId String
+  cover        String
+  price        Int?
+  timelineDays Int?
+  milestones   Json?
+  attachments  Json?
+  status       String   @default("sent") // "sent"|"shortlisted"|"withdrawn"|"accepted"|"rejected"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  job        Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancer User      @relation("FreelancerProposals", fields: [freelancerId], references: [id], onDelete: Cascade)
+  threads    Thread[]
+  agreements Agreement[]
+
+  @@map("proposals")
+}
+
+model Agreement {
+  id                  String          @id @default(cuid())
+  jobId               String
+  proposalId          String
+  clientId            String
+  freelancerId        String
+  scopeSummary        String
+  acceptanceChecklist Json            // [{id,text,required}]
+  priceTotal          Int?
+  startDate           DateTime?
+  targetDate          DateTime?
+  assuranceMethod     AssuranceMethod
+  assuranceState      String          @default("DRAFT") // DRAFT|PENDING_SECURE|SECURED|IN_PROGRESS|SUBMITTED|ACCEPTED|CLOSED
+  milestoneJson       Json?           // [{id,title,amount,invoiceUrl,receiptId,paidStatus,acceptedAt}]
+  escrowJson          Json?           // {provider,url,txId,status}
+  cardJson            Json?           // {holdAmount,paymentIntentId,holdExpiresAt,capturedAt,voidedAt}
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  // Relations
+  client     User       @relation("ClientAgreements", fields: [clientId], references: [id], onDelete: Cascade)
+  freelancer User       @relation("FreelancerAgreements", fields: [freelancerId], references: [id], onDelete: Cascade)
+  proposal   Proposal   @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+  reviews    Review[]
+  threads    Thread[]
+
+  @@map("agreements")
+}
+
+model Delivery {
+  id          String   @id @default(cuid())
+  agreementId String
+  note        String?
+  files       Json?    // [{name,url,type,size,watermarked}]
+  links       Json?    // [{label,url}]
+  status      String   @default("submitted") // "submitted"|"accepted"|"revision_requested"
+  createdAt   DateTime @default(now())
+
+  // Relations
+  agreement Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  @@map("deliveries")
+}
+
+model Review {
+  id          String   @id @default(cuid())
+  agreementId String
+  reviewerId  String
+  revieweeId  String
+  rating      Int
+  comment     String
+  createdAt   DateTime @default(now())
+
+  // Relations
+  agreement Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  reviewer  User      @relation("ReviewsGiven", fields: [reviewerId], references: [id], onDelete: Cascade)
+  reviewee  User      @relation("ReviewsReceived", fields: [revieweeId], references: [id], onDelete: Cascade)
+
+  @@map("reviews")
+}
+
+model Thread {
+  id           String   @id @default(cuid())
+  type         String   // "job"|"proposal"|"agreement"
+  participants String[] // user ids
+  jobId        String?
+  proposalId   String?
+  agreementId  String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  messages  Message[]
+  job       Job?       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  proposal  Proposal?  @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  agreement Agreement? @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  @@map("threads")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  threadId  String
+  senderId  String
+  body      String
+  files     Json?
+  createdAt DateTime @default(now())
+
+  // Relations
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender User   @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  reporterId String
+  targetType String   // "user"|"job"|"message"|"proposal"|"agreement"
+  targetId   String
+  reason     String
+  notes      String?
+  status     String   @default("open") // "open"|"closed"
+  createdAt  DateTime @default(now())
+
+  // Relations
+  reporter User @relation("ReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+  target   User @relation("ReportsReceived", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String   // e.g., AGREEMENT_METHOD_SWITCH
+  targetType String
+  targetId   String
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  // Relations
+  actor User? @relation("AuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
+
+model RateLimit {
+  id        String   @id @default(cuid())
+  userId    String
+  windowKey String
+  count     Int      @default(0)
+  windowEnd DateTime
+
+  // Relations
+  user User @relation("UserRateLimits", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, windowKey])
+  @@map("rate_limits")
+}
+
+model Donation {
+  id          String   @id @default(cuid())
+  donorName   String?
+  donorEmail  String?
+  amount      Int      // in cents
+  currency    String   @default("usd")
+  provider    String   // "stripe" | "paypal"
+  providerId  String   // transaction ID from provider
+  message     String?
+  isRecurring Boolean  @default(false)
+  showOnWall  Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@map("donations")
+}
+
+model Interest {
+  id           String   @id @default(cuid())
+  jobId        String
+  freelancerId String
+  message      String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancer User @relation("FreelancerInterests", fields: [freelancerId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, freelancerId])
+  @@index([freelancerId, createdAt])
+  @@map("interests")
+}
+
+model DailyInterestLimit {
+  id           String   @id @default(cuid())
+  userId       String
+  date         DateTime // Date only (YYYY-MM-DD)
+  interestCount Int     @default(0)
+  maxAllowed   Int      @default(15) // Can be upgraded for premium users
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  user User @relation("UserDailyLimits", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@map("daily_interest_limits")
+}

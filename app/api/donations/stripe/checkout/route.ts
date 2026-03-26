@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { stripe } from '@/lib/stripe'
+import { getStripe } from '@/lib/stripe'
 import { z } from 'zod'
 
 const checkoutSchema = z.object({
-  amount: z.number().min(100).max(1000000), // $1 to $10,000 in cents
+  amount: z.number().min(100).max(1000000),
   currency: z.string().default('usd'),
   isRecurring: z.boolean().default(false),
   donorName: z.string().optional(),
@@ -13,6 +13,18 @@ const checkoutSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    const stripe = getStripe()
+
+    if (!stripe) {
+      return NextResponse.json(
+        {
+          error: 'Donations are temporarily unavailable. Stripe is not configured.',
+          code: 'STRIPE_NOT_CONFIGURED',
+        },
+        { status: 503 }
+      )
+    }
+
     const body = await request.json()
     const { amount, currency, isRecurring, donorName, message, showOnWall } = checkoutSchema.parse(body)
 
@@ -27,11 +39,7 @@ export async function POST(request: NextRequest) {
               description: 'Support the free marketplace platform',
             },
             unit_amount: amount,
-            ...(isRecurring && {
-              recurring: {
-                interval: 'month',
-              },
-            }),
+            ...(isRecurring && { recurring: { interval: 'month' } }),
           },
           quantity: 1,
         },
@@ -50,21 +58,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ url: session.url })
   } catch (error) {
     console.error('Stripe checkout error:', error)
-    
-    // Check if we're in demo mode with invalid Stripe keys
-    const isDemoStripe = !process.env.STRIPE_SECRET_KEY || 
-      process.env.STRIPE_SECRET_KEY.includes('placeholder')
-    
-    if (isDemoStripe) {
-      return NextResponse.json({
-        url: '/donations?demo=true&message=Demo+mode+-+Stripe+not+configured',
-        _demo: true
-      })
-    }
-    
-    return NextResponse.json(
-      { error: 'Failed to create checkout session' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to create checkout session' }, { status: 500 })
   }
 }
